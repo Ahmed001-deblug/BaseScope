@@ -1,0 +1,217 @@
+"use client";
+import { useEffect, useState } from "react";
+import { useMiniKit } from "@coinbase/onchainkit/minikit";
+
+type Screen = "search" | "portfolio" | "pnl";
+
+interface PortfolioData {
+  username: string;
+  address: string;
+  avatar: string;
+  currentValue: number;
+  ath: number;
+  athDate: string;
+  atl: number;
+  atlDate: string;
+  change24h: number;
+  change7d: number;
+  change30d: number;
+  change1y: number;
+  totalInvested: number;
+}
+
+function getMockData(query: string): PortfolioData {
+  return {
+    username: query.startsWith("0x") ? query.slice(0, 6) + "..." + query.slice(-4) : query,
+    address: query.startsWith("0x") ? query : "0x1a2b...9f3c",
+    avatar: "🧑‍💻",
+    currentValue: 4200.69,
+    ath: 8100.00,
+    athDate: "Mar 3, 2025",
+    atl: 320.00,
+    atlDate: "Nov 12, 2024",
+    change24h: 12.4,
+    change7d: -4.2,
+    change30d: 38.1,
+    change1y: 210.5,
+    totalInvested: 2000,
+  };
+}
+
+function pct(val: number) {
+  return (val >= 0 ? "+" : "") + val.toFixed(2) + "%";
+}
+
+function usd(val: number) {
+  return "$" + val.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+export default function Home() {
+  const { setFrameReady, isFrameReady, context } = useMiniKit();
+  const [screen, setScreen] = useState<Screen>("search");
+  const [query, setQuery] = useState("");
+  const [data, setData] = useState<PortfolioData | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!isFrameReady) setFrameReady();
+  }, [setFrameReady, isFrameReady]);
+
+  useEffect(() => {
+    if (context?.user?.username) {
+      setQuery(context.user.username);
+    }
+  }, [context]);
+
+  const handleSearch = () => {
+    if (!query.trim()) return;
+    setLoading(true);
+    setTimeout(() => {
+      setData(getMockData(query.trim()));
+      setScreen("portfolio");
+      setLoading(false);
+    }, 1500);
+  };
+
+  const shareOnX = () => {
+    if (!data) return;
+    const text = "My Base Portfolio\n"
+      + usd(data.currentValue) + "\n"
+      + "ATH: " + usd(data.ath) + " (" + data.athDate + ")\n"
+      + "ATL: " + usd(data.atl) + " (" + data.atlDate + ")\n"
+      + "1Y: " + pct(data.change1y) + "\n"
+      + "Checked with BaseScope";
+    window.open("https://x.com/intent/tweet?text=" + encodeURIComponent(text), "_blank");
+  };
+
+  const pnl = data ? data.currentValue - data.totalInvested : 0;
+  const roi = data ? (pnl / data.totalInvested) * 100 : 0;
+
+  return (
+    <div style={{ minHeight: "100vh", background: "linear-gradient(135deg, #0a0a0f 0%, #0d1117 100%)", color: "#fff", fontFamily: "'Courier New', monospace", padding: "0", display: "flex", flexDirection: "column" }}>
+      <div style={{ padding: "20px 20px 12px", borderBottom: "1px solid #1a1a2e", display: "flex", alignItems: "center", gap: "10px" }}>
+        {screen !== "search" && (
+          <button onClick={() => setScreen("search")} style={{ background: "none", border: "none", color: "#4a9eff", fontSize: "1.2rem", cursor: "pointer", padding: "0 8px 0 0" }}>←</button>
+        )}
+        <div>
+          <div style={{ fontSize: "1.1rem", fontWeight: 900, letterSpacing: "0.05em" }}>BASE<span style={{ color: "#0052ff" }}>SCOPE</span></div>
+          <div style={{ fontSize: "0.55rem", color: "#444", letterSpacing: "0.2em" }}>ONCHAIN PORTFOLIO TRACKER</div>
+        </div>
+        <div style={{ marginLeft: "auto", width: "8px", height: "8px", borderRadius: "50%", background: "#0052ff", boxShadow: "0 0 8px #0052ff" }} />
+      </div>
+
+      <div style={{ flex: 1, padding: "20px", maxWidth: "480px", width: "100%", margin: "0 auto" }}>
+
+        {screen === "search" && (
+          <div>
+            <div style={{ marginBottom: "32px", marginTop: "12px" }}>
+              <div style={{ fontSize: "1.4rem", fontWeight: 900, lineHeight: 1.2, marginBottom: "6px" }}>
+                {context?.user?.username ? "👋 Hey @" + context.user.username : "🔍 Search any portfolio"}
+              </div>
+              <div style={{ fontSize: "0.7rem", color: "#555", letterSpacing: "0.1em" }}>ENTER FARCASTER USERNAME OR BASE WALLET</div>
+            </div>
+            {context?.user?.username && (
+              <button onClick={() => {
+                setQuery(context.user.username!);
+                setLoading(true);
+                setTimeout(() => { setData(getMockData(context.user.username!)); setScreen("portfolio"); setLoading(false); }, 1500);
+              }} style={{ width: "100%", padding: "16px", background: "linear-gradient(135deg, #0052ff, #0099ff)", border: "none", borderRadius: "12px", color: "#fff", fontFamily: "'Courier New', monospace", fontWeight: 900, fontSize: "0.9rem", cursor: "pointer", marginBottom: "16px" }}>
+                📊 VIEW MY PORTFOLIO
+              </button>
+            )}
+            <div style={{ background: "#0d0d0d", border: "1px solid #1f1f2e", borderRadius: "12px", padding: "4px", display: "flex", gap: "8px", marginBottom: "12px" }}>
+              <input value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSearch()} placeholder="@username or 0x..." style={{ flex: 1, background: "transparent", border: "none", outline: "none", color: "#e0e0e0", fontFamily: "'Courier New', monospace", fontSize: "0.9rem", padding: "12px 14px" }} />
+              <button onClick={handleSearch} disabled={loading} style={{ background: loading ? "#111" : "#0052ff", border: "none", borderRadius: "10px", color: "#fff", fontFamily: "'Courier New', monospace", fontWeight: 700, fontSize: "0.8rem", padding: "10px 16px", cursor: loading ? "default" : "pointer" }}>
+                {loading ? "..." : "SEARCH"}
+              </button>
+            </div>
+            <div style={{ fontSize: "0.65rem", color: "#333", textAlign: "center", letterSpacing: "0.1em" }}>WORKS WITH ANY FARCASTER USER OR BASE WALLET</div>
+          </div>
+        )}
+
+        {screen === "portfolio" && data && (
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "24px", marginTop: "8px" }}>
+              <div style={{ width: "48px", height: "48px", borderRadius: "50%", background: "#0052ff22", border: "2px solid #0052ff44", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "1.4rem" }}>{data.avatar}</div>
+              <div>
+                <div style={{ fontWeight: 900, fontSize: "1rem" }}>@{data.username}</div>
+                <div style={{ fontSize: "0.6rem", color: "#444" }}>{data.address}</div>
+              </div>
+            </div>
+            <div style={{ background: "#0d0d1a", border: "1px solid #1a1a2e", borderRadius: "16px", padding: "20px", marginBottom: "12px" }}>
+              <div style={{ fontSize: "0.6rem", color: "#444", letterSpacing: "0.2em", marginBottom: "6px" }}>PORTFOLIO VALUE</div>
+              <div style={{ fontSize: "2rem", fontWeight: 900 }}>{usd(data.currentValue)}</div>
+              <div style={{ fontSize: "0.9rem", fontWeight: 700, marginTop: "4px", color: data.change24h >= 0 ? "#00ff87" : "#ff3c5f" }}>{pct(data.change24h)} today</div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "12px" }}>
+              {[{ label: "ATH 📈", value: usd(data.ath), date: data.athDate, color: "#00ff87" }, { label: "ATL 📉", value: usd(data.atl), date: data.atlDate, color: "#ff3c5f" }].map(({ label, value, date, color }) => (
+                <div key={label} style={{ background: "#0d0d1a", border: "1px solid #1a1a2e", borderRadius: "12px", padding: "14px" }}>
+                  <div style={{ fontSize: "0.6rem", color: "#444", marginBottom: "6px" }}>{label}</div>
+                  <div style={{ fontWeight: 900, color, fontSize: "1rem" }}>{value}</div>
+                  <div style={{ fontSize: "0.6rem", color: "#333", marginTop: "4px" }}>{date}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ background: "#0d0d1a", border: "1px solid #1a1a2e", borderRadius: "12px", padding: "16px", marginBottom: "12px" }}>
+              <div style={{ fontSize: "0.6rem", color: "#444", letterSpacing: "0.2em", marginBottom: "12px" }}>PERFORMANCE</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "8px" }}>
+                {[{ label: "24H", val: data.change24h }, { label: "7D", val: data.change7d }, { label: "30D", val: data.change30d }, { label: "1Y", val: data.change1y }].map(({ label, val }) => (
+                  <div key={label} style={{ textAlign: "center" }}>
+                    <div style={{ fontSize: "0.55rem", color: "#444", marginBottom: "4px" }}>{label}</div>
+                    <div style={{ fontWeight: 900, fontSize: "0.8rem", color: val >= 0 ? "#00ff87" : "#ff3c5f" }}>{pct(val)}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <button onClick={() => setScreen("pnl")} style={{ width: "100%", padding: "16px", background: "linear-gradient(135deg, #0052ff, #0099ff)", border: "none", borderRadius: "12px", color: "#fff", fontFamily: "'Courier New', monospace", fontWeight: 900, fontSize: "0.9rem", cursor: "pointer" }}>
+              📊 VIEW PnL CARD
+            </button>
+          </div>
+        )}
+
+        {screen === "pnl" && data && (
+          <div>
+            <div style={{ marginBottom: "20px", marginTop: "8px" }}>
+              <div style={{ fontSize: "0.6rem", color: "#444", letterSpacing: "0.2em" }}>YOUR PnL CARD</div>
+            </div>
+            <div style={{ background: "linear-gradient(135deg, #0a0a1a, #0d1130)", border: "1px solid #0052ff44", borderRadius: "16px", padding: "24px", marginBottom: "16px", boxShadow: "0 0 40px #0052ff22" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
+                <div style={{ fontSize: "0.9rem", fontWeight: 900 }}>BASE<span style={{ color: "#0052ff" }}>SCOPE</span></div>
+                <div style={{ fontSize: "0.6rem", color: "#444" }}>🔵 BASE NETWORK</div>
+              </div>
+              <div style={{ marginBottom: "8px", fontSize: "0.7rem", color: "#555" }}>@{data.username}</div>
+              <div style={{ fontSize: "2rem", fontWeight: 900, marginBottom: "4px" }}>{usd(data.currentValue)}</div>
+              <div style={{ fontSize: "1rem", fontWeight: 700, marginBottom: "20px", color: pnl >= 0 ? "#00ff87" : "#ff3c5f" }}>
+                {pnl >= 0 ? "▲" : "▼"} {usd(Math.abs(pnl))} ({pct(roi)})
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "20px" }}>
+                <div>
+                  <div style={{ fontSize: "0.55rem", color: "#444" }}>ATH</div>
+                  <div style={{ color: "#00ff87", fontWeight: 700 }}>{usd(data.ath)}</div>
+                  <div style={{ fontSize: "0.55rem", color: "#333" }}>{data.athDate}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: "0.55rem", color: "#444" }}>ATL</div>
+                  <div style={{ color: "#ff3c5f", fontWeight: 700 }}>{usd(data.atl)}</div>
+                  <div style={{ fontSize: "0.55rem", color: "#333" }}>{data.atlDate}</div>
+                </div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "6px" }}>
+                {[{ label: "24H", val: data.change24h }, { label: "7D", val: data.change7d }, { label: "30D", val: data.change30d }, { label: "1Y", val: data.change1y }].map(({ label, val }) => (
+                  <div key={label} style={{ background: "#ffffff08", borderRadius: "8px", padding: "8px 4px", textAlign: "center" }}>
+                    <div style={{ fontSize: "0.5rem", color: "#444", marginBottom: "2px" }}>{label}</div>
+                    <div style={{ fontWeight: 900, fontSize: "0.75rem", color: val >= 0 ? "#00ff87" : "#ff3c5f" }}>{pct(val)}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <button onClick={shareOnX} style={{ width: "100%", padding: "16px", background: "#000", border: "1px solid #333", borderRadius: "12px", color: "#fff", fontFamily: "'Courier New', monospace", fontWeight: 900, fontSize: "0.9rem", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "8px" }}>
+              𝕏 SHARE ON X
+            </button>
+          </div>
+        )}
+
+      </div>
+    </div>
+  );
+}
