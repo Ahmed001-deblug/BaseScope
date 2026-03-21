@@ -71,16 +71,68 @@ async function getWalletData(address: string): Promise<{
 }> {
   try {
     const moralisKey = process.env.NEXT_PUBLIC_MORALIS_API_KEY || "";
+    const alchemyKey = process.env.NEXT_PUBLIC_ALCHEMY_API_KEY || "";
+    const baseUrl = `https://base-mainnet.g.alchemy.com/v2/${alchemyKey}`;
 
-    // Get current net worth
-    const networthRes = await fetch(
-      `https://deep-index.moralis.io/api/v2.2/wallets/${address}/net-worth?chains=base&exclude_spam=true&exclude_unverified_contracts=true`,
-      { headers: { "X-API-Key": moralisKey } }
+    // Get ETH balance via Alchemy
+    const ethRes = await fetch(baseUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: 1, jsonrpc: "2.0", method: "eth_getBalance", params: [address, "latest"] }),
+    });
+    const ethData = await ethRes.json();
+    const ethBalance = parseInt(ethData?.result || "0", 16) / 1e18;
+
+    // Get ETH price
+    const ethPriceRes = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd");
+    const ethPriceData = await ethPriceRes.json();
+    const ethPrice = ethPriceData?.ethereum?.usd || 0;
+    const ethValue = ethBalance * ethPrice;
+
+    // Get ERC-20 token balances via Alchemy
+    const tokenRes = await fetch(baseUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: 1, jsonrpc: "2.0",
+        method: "alchemy_getTokenBalances",
+        params: [address, "erc20"],
+      }),
+    });
+    const tokenData = await tokenRes.json();
+    const tokenBalances = tokenData?.result?.tokenBalances || [];
+
+    // Known Base token addresses and their CoinGecko IDs
+    const knownTokens: Record<string, { symbol: string; decimals: number; coingeckoId: string }> = {
+      "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": { symbol: "USDC", decimals: 6, coingeckoId: "usd-coin" },
+      "0x4200000000000000000000000000000000000006": { symbol: "WETH", decimals: 18, coingeckoId: "ethereum" },
+      "0x50c5725949a6f0c72e6c4a641f24049a917db0cb": { symbol: "DAI", decimals: 18, coingeckoId: "dai" },
+      "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca": { symbol: "USDbC", decimals: 6, coingeckoId: "usd-coin" },
+      "0x2ae3f1ec7f1f5012cfeab0185bfc7aa3cf0dec22": { symbol: "cbETH", decimals: 18, coingeckoId: "coinbase-wrapped-staked-eth" },
+    };
+
+    // Get prices for known tokens
+    const coingeckoIds = [...new Set(Object.values(knownTokens).map(t => t.coingeckoId))].join(",");
+    const tokenPriceRes = await fetch(
+      `https://api.coingecko.com/api/v3/simple/price?ids=${coingeckoIds}&vs_currencies=usd`
     );
-    const networthData = await networthRes.json();
-    const currentValue = parseFloat(networthData?.total_networth_usd || "0");
+    const tokenPrices = await tokenPriceRes.json();
 
-    // Get full net worth history from wallet creation (10 years back)
+    // Calculate token values
+    let totalTokenValue = 0;
+    for (const token of tokenBalances) {
+      const contractAddr = token.contractAddress.toLowerCase();
+      const known = knownTokens[contractAddr];
+      if (!known) continue;
+      const balance = parseInt(token.tokenBalance, 16) / Math.pow(10, known.decimals);
+      const price = tokenPrices?.[known.coingeckoId]?.usd || 0;
+      const value = balance * price;
+      totalTokenValue += value;
+    }
+
+    const currentValue = ethValue + totalTokenValue;
+
+    // Get full net worth history from Moralis for ATH/ATL
     const historyRes = await fetch(
       `https://deep-index.moralis.io/api/v2.2/wallets/${address}/net-worth/history?chain=base&days=3650`,
       { headers: { "X-API-Key": moralisKey } }
@@ -88,7 +140,6 @@ async function getWalletData(address: string): Promise<{
     const historyData = await historyRes.json();
     const snapshots: { date: string; total_networth_usd: string }[] = historyData?.result || [];
 
-    // Find real ATH and ATL from full history
     let ath = currentValue;
     let athDate = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
     let atl = currentValue;
@@ -118,32 +169,10 @@ async function getWalletData(address: string): Promise<{
       totalInvested: currentValue * 0.7,
     };
   } catch {
-    try {
-      const alchemyKey = process.env.NEXT_PUBLIC_ALCHEMY_API_KEY || "";
-      const baseUrl = `https://base-mainnet.g.alchemy.com/v2/${alchemyKey}`;
-      const ethRes = await fetch(baseUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: 1, jsonrpc: "2.0", method: "eth_getBalance", params: [address, "latest"] }),
-      });
-      const ethData = await ethRes.json();
-      const ethBalance = parseInt(ethData?.result || "0", 16) / 1e18;
-      const priceRes = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd");
-      const priceData = await priceRes.json();
-      const ethPrice = priceData?.ethereum?.usd || 0;
-      const currentValue = ethBalance * ethPrice;
-      return {
-        currentValue, change24h: 0, change7d: 0, change30d: 0, change1y: 0,
-        ath: currentValue * 1.8, athDate: "Mar 3, 2025",
-        atl: currentValue * 0.3, atlDate: "Nov 12, 2024",
-        totalInvested: currentValue * 0.7,
-      };
-    } catch {
-      return {
-        currentValue: 0, change24h: 0, change7d: 0, change30d: 0, change1y: 0,
-        ath: 0, athDate: "—", atl: 0, atlDate: "—", totalInvested: 0,
-      };
-    }
+    return {
+      currentValue: 0, change24h: 0, change7d: 0, change30d: 0, change1y: 0,
+      ath: 0, athDate: "—", atl: 0, atlDate: "—", totalInvested: 0,
+    };
   }
 }
 
