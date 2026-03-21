@@ -4,7 +4,7 @@ export async function GET(req: NextRequest) {
   const address = req.nextUrl.searchParams.get("address");
   if (!address) return NextResponse.json({ error: "No address" }, { status: 400 });
 
-  const moralisKey = process.env.NEXT_PUBLIC_MORALIS_API_KEY || "";
+  const moralisKey = process.env.MORALIS_API_KEY || "";
 
   try {
     // Get current net worth
