@@ -70,83 +70,19 @@ async function getWalletData(address: string): Promise<{
   totalInvested: number;
 }> {
   try {
-    const zerionKey = process.env.NEXT_PUBLIC_ZERION_API_KEY || "";
-    const encoded = btoa(`${zerionKey}:`);
-
-    // Get portfolio positions filtered to Base chain only
-    const portfolioRes = await fetch(
-      `https://api.zerion.io/v1/wallets/${address}/positions/?filter[chain_ids]=base&filter[position_types]=wallet&currency=usd`,
-      {
-        headers: {
-          "Authorization": `Basic ${encoded}`,
-          "Content-Type": "application/json",
-        }
-      }
-    );
-    const portfolioData = await portfolioRes.json();
-    const positions = portfolioData?.data || [];
-
-    // Sum up all Base token values
-    const currentValue = positions.reduce((total: number, pos: {
-      attributes?: { value?: number }
-    }) => {
-      const value = pos?.attributes?.value || 0;
-      return total + value;
-    }, 0);
-
-    // Get portfolio chart for ATH/ATL (1 year of data)
-    const chartRes = await fetch(
-      `https://api.zerion.io/v1/wallets/${address}/portfolio/chart?currency=usd&period=year&filter[chain_ids]=base`,
-      {
-        headers: {
-          "Authorization": `Basic ${encoded}`,
-          "Content-Type": "application/json",
-        }
-      }
-    );
-    const chartData = await chartRes.json();
-    const points: [number, number][] = chartData?.data?.attributes?.points || [];
-
-    let ath = currentValue;
-    let athDate = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-    let atl = currentValue;
-    let atlDate = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-
-    points.forEach(([timestamp, value]) => {
-      const date = new Date(timestamp * 1000).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-      if (value > ath) { ath = value; athDate = date; }
-      if (value > 0 && value < atl) { atl = value; atlDate = date; }
-    });
-
-    // Get 24h, 7d, 30d, 1y changes from portfolio
-    const pnlRes = await fetch(
-      `https://api.zerion.io/v1/wallets/${address}/portfolio/?currency=usd&filter[chain_ids]=base`,
-      {
-        headers: {
-          "Authorization": `Basic ${encoded}`,
-          "Content-Type": "application/json",
-        }
-      }
-    );
-    const pnlData = await pnlRes.json();
-    const changes = pnlData?.data?.attributes?.changes || {};
-
-    const change24h = changes?.percent_1d || 0;
-    const change7d = changes?.percent_1w || 0;
-    const change30d = changes?.percent_1m || 0;
-    const change1y = changes?.percent_1y || 0;
-
+    const res = await fetch(`/api/portfolio?address=${address}`);
+    const data = await res.json();
     return {
-      currentValue,
-      change24h,
-      change7d,
-      change30d,
-      change1y,
-      ath,
-      athDate,
-      atl,
-      atlDate,
-      totalInvested: currentValue * 0.7,
+      currentValue: data.currentValue || 0,
+      change24h: data.change24h || 0,
+      change7d: data.change7d || 0,
+      change30d: data.change30d || 0,
+      change1y: data.change1y || 0,
+      ath: data.ath || 0,
+      athDate: data.athDate || "—",
+      atl: data.atl || 0,
+      atlDate: data.atlDate || "—",
+      totalInvested: (data.currentValue || 0) * 0.7,
     };
   } catch {
     return {
