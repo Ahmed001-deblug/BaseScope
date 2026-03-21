@@ -58,6 +58,25 @@ async function lookupFarcasterUser(username: string): Promise<{ address: string;
   }
 }
 
+async function reverseLookupWallet(address: string): Promise<{ avatar: string; displayName: string } | null> {
+  try {
+    const res = await fetch(
+      `https://api.neynar.com/v2/farcaster/user/bulk-by-address?addresses=${address}`,
+      { headers: { "api_key": process.env.NEXT_PUBLIC_NEYNAR_API_KEY || "" } }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    const users = data?.[address.toLowerCase()];
+    if (!users || users.length === 0) return null;
+    const user = users[0];
+    const avatar = user?.pfp_url || "";
+    const displayName = user?.username || "";
+    return { avatar, displayName };
+  } catch {
+    return null;
+  }
+}
+
 function validateInput(input: string): string | null {
   const trimmed = input.trim();
 
@@ -129,10 +148,14 @@ export default function Home() {
       let displayName = searchQuery;
 
       if (searchQuery.startsWith("0x")) {
-        // Wallet address search — no Farcaster lookup
+        // Wallet address — try reverse Farcaster lookup first
         address = searchQuery;
-        avatar = "";
         displayName = searchQuery.slice(0, 6) + "..." + searchQuery.slice(-4);
+        const farcasterProfile = await reverseLookupWallet(searchQuery);
+        if (farcasterProfile) {
+          avatar = farcasterProfile.avatar;
+          displayName = farcasterProfile.displayName;
+        }
       } else {
         // Farcaster username search
         const farcasterUser = await lookupFarcasterUser(searchQuery);
