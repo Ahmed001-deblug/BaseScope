@@ -72,7 +72,7 @@ async function getWalletData(address: string): Promise<{
   try {
     const moralisKey = process.env.NEXT_PUBLIC_MORALIS_API_KEY || "";
 
-    // Get net worth from Moralis
+    // Get current net worth
     const networthRes = await fetch(
       `https://deep-index.moralis.io/api/v2.2/wallets/${address}/net-worth?chains=base&exclude_spam=true&exclude_unverified_contracts=true`,
       { headers: { "X-API-Key": moralisKey } }
@@ -80,53 +80,47 @@ async function getWalletData(address: string): Promise<{
     const networthData = await networthRes.json();
     const currentValue = parseFloat(networthData?.total_networth_usd || "0");
 
-    // Get portfolio history from Moralis
+    // Get full net worth history from wallet creation (10 years back)
     const historyRes = await fetch(
-      `https://deep-index.moralis.io/api/v2.2/wallets/${address}/history?chain=base&limit=100`,
+      `https://deep-index.moralis.io/api/v2.2/wallets/${address}/net-worth/history?chain=base&days=3650`,
       { headers: { "X-API-Key": moralisKey } }
     );
     const historyData = await historyRes.json();
-    const history = historyData?.result || [];
+    const snapshots: { date: string; total_networth_usd: string }[] = historyData?.result || [];
 
-    // Calculate % changes using Moralis profitability endpoint
-    const profitRes = await fetch(
-      `https://deep-index.moralis.io/api/v2.2/wallets/${address}/profitability/summary?chain=base`,
-      { headers: { "X-API-Key": moralisKey } }
-    );
-    const profitData = await profitRes.json();
-
-    const change24h = parseFloat(profitData?.realized_profit_24h || "0");
-    const change7d = parseFloat(profitData?.realized_profit_7d || "0");
-    const change30d = parseFloat(profitData?.realized_profit_30d || "0");
-    const change1y = parseFloat(profitData?.realized_profit_365d || "0");
-
-    // Calculate ATH and ATL from history
+    // Find real ATH and ATL from full history
     let ath = currentValue;
     let athDate = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
     let atl = currentValue;
     let atlDate = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 
-    if (history.length > 0) {
-      let runningValue = currentValue;
-      history.forEach((tx: { block_timestamp: string; value_usd?: number }) => {
-        const val = parseFloat(String(tx?.value_usd || "0"));
-        const date = new Date(tx.block_timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-        if (val > ath) { ath = val; athDate = date; }
-        if (val < atl && val > 0) { atl = val; atlDate = date; }
-        runningValue += val;
-      });
-    }
+    snapshots.forEach((snap) => {
+      const val = parseFloat(snap.total_networth_usd || "0");
+      const date = new Date(snap.date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+      if (val > ath) { ath = val; athDate = date; }
+      if (val > 0 && val < atl) { atl = val; atlDate = date; }
+    });
 
-    // Total invested estimate
-    const totalInvested = currentValue * 0.7;
+    // Get % changes
+    const profitRes = await fetch(
+      `https://deep-index.moralis.io/api/v2.2/wallets/${address}/profitability/summary?chain=base`,
+      { headers: { "X-API-Key": moralisKey } }
+    );
+    const profitData = await profitRes.json();
+    const change24h = parseFloat(profitData?.realized_profit_24h || "0");
+    const change7d = parseFloat(profitData?.realized_profit_7d || "0");
+    const change30d = parseFloat(profitData?.realized_profit_30d || "0");
+    const change1y = parseFloat(profitData?.realized_profit_365d || "0");
 
-    return { currentValue, change24h, change7d, change30d, change1y, ath, athDate, atl, atlDate, totalInvested };
+    return {
+      currentValue, change24h, change7d, change30d, change1y,
+      ath, athDate, atl, atlDate,
+      totalInvested: currentValue * 0.7,
+    };
   } catch {
-    // Fallback to Alchemy if Moralis fails
     try {
       const alchemyKey = process.env.NEXT_PUBLIC_ALCHEMY_API_KEY || "";
       const baseUrl = `https://base-mainnet.g.alchemy.com/v2/${alchemyKey}`;
-
       const ethRes = await fetch(baseUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -138,10 +132,8 @@ async function getWalletData(address: string): Promise<{
       const priceData = await priceRes.json();
       const ethPrice = priceData?.ethereum?.usd || 0;
       const currentValue = ethBalance * ethPrice;
-
       return {
-        currentValue,
-        change24h: 0, change7d: 0, change30d: 0, change1y: 0,
+        currentValue, change24h: 0, change7d: 0, change30d: 0, change1y: 0,
         ath: currentValue * 1.8, athDate: "Mar 3, 2025",
         atl: currentValue * 0.3, atlDate: "Nov 12, 2024",
         totalInvested: currentValue * 0.7,
@@ -234,12 +226,7 @@ export default function Home() {
         ath: 0, athDate: "—", atl: 0, atlDate: "—", totalInvested: 0,
       };
 
-      setData({
-        username: displayName,
-        address,
-        avatar,
-        ...walletData,
-      });
+      setData({ username: displayName, address, avatar, ...walletData });
       setScreen("portfolio");
     } catch {
       setError("Something went wrong. Please try again.");
