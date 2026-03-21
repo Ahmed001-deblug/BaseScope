@@ -38,6 +38,36 @@ function getMockData(query: string): PortfolioData {
   };
 }
 
+function validateInput(input: string): string | null {
+  const trimmed = input.trim();
+
+  if (!trimmed) {
+    return "Please enter a username or wallet address.";
+  }
+
+  if (/^(1[a-zA-Z0-9]{25,34}|3[a-zA-Z0-9]{25,34}|bc1[a-zA-Z0-9]{6,87})$/.test(trimmed)) {
+    return "₿ Bitcoin address detected. BaseScope only supports Base and Ethereum wallets. Try a Base wallet starting with 0x or a Farcaster username.";
+  }
+
+  if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(trimmed) && !trimmed.startsWith("0x")) {
+    return "◎ This looks like a Solana address. BaseScope only supports Base and Ethereum wallets. Try a Base wallet starting with 0x or a Farcaster username.";
+  }
+
+  if (trimmed.startsWith("0x")) {
+    if (!/^0x[a-fA-F0-9]{40}$/.test(trimmed)) {
+      return "Invalid wallet address. A valid Base wallet starts with 0x and is 42 characters long.";
+    }
+    return null;
+  }
+
+  const username = trimmed.startsWith("@") ? trimmed.slice(1) : trimmed;
+  if (!/^[a-zA-Z0-9_.-]{1,50}$/.test(username)) {
+    return "Invalid input. Please enter a valid Farcaster username or a Base wallet starting with 0x.";
+  }
+
+  return null;
+}
+
 function pct(val: number) {
   return (val >= 0 ? "+" : "") + val.toFixed(2) + "%";
 }
@@ -52,6 +82,7 @@ export default function Home() {
   const [query, setQuery] = useState("");
   const [data, setData] = useState<PortfolioData | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isFrameReady) setFrameReady();
@@ -64,7 +95,12 @@ export default function Home() {
   }, [context]);
 
   const handleSearch = () => {
-    if (!query.trim()) return;
+    setError(null);
+    const validationError = validateInput(query);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
     setLoading(true);
     setTimeout(() => {
       setData(getMockData(query.trim()));
@@ -91,7 +127,7 @@ export default function Home() {
     <div style={{ minHeight: "100vh", background: "linear-gradient(135deg, #0a0a0f 0%, #0d1117 100%)", color: "#fff", fontFamily: "'Courier New', monospace", padding: "0", display: "flex", flexDirection: "column" }}>
       <div style={{ padding: "20px 20px 12px", borderBottom: "1px solid #1a1a2e", display: "flex", alignItems: "center", gap: "10px" }}>
         {screen !== "search" && (
-          <button onClick={() => setScreen("search")} style={{ background: "none", border: "none", color: "#4a9eff", fontSize: "1.2rem", cursor: "pointer", padding: "0 8px 0 0" }}>←</button>
+          <button onClick={() => { setScreen("search"); setError(null); }} style={{ background: "none", border: "none", color: "#4a9eff", fontSize: "1.2rem", cursor: "pointer", padding: "0 8px 0 0" }}>←</button>
         )}
         <div>
           <div style={{ fontSize: "1.1rem", fontWeight: 900, letterSpacing: "0.05em" }}>BASE<span style={{ color: "#0052ff" }}>SCOPE</span></div>
@@ -112,6 +148,7 @@ export default function Home() {
             </div>
             {context?.user?.username && (
               <button onClick={() => {
+                setError(null);
                 setQuery(context.user.username!);
                 setLoading(true);
                 setTimeout(() => { setData(getMockData(context.user.username!)); setScreen("portfolio"); setLoading(false); }, 1500);
@@ -119,12 +156,25 @@ export default function Home() {
                 📊 VIEW MY PORTFOLIO
               </button>
             )}
-            <div style={{ background: "#0d0d0d", border: "1px solid #1f1f2e", borderRadius: "12px", padding: "4px", display: "flex", gap: "8px", marginBottom: "12px" }}>
-              <input value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleSearch()} placeholder="@username or 0x..." style={{ flex: 1, background: "transparent", border: "none", outline: "none", color: "#e0e0e0", fontFamily: "'Courier New', monospace", fontSize: "0.9rem", padding: "12px 14px" }} />
+            <div style={{ background: "#0d0d0d", border: `1px solid ${error ? "#ff3c5f" : "#1f1f2e"}`, borderRadius: "12px", padding: "4px", display: "flex", gap: "8px", marginBottom: "8px" }}>
+              <input
+                value={query}
+                onChange={(e) => { setQuery(e.target.value); setError(null); }}
+                onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+                placeholder="@username or 0x..."
+                style={{ flex: 1, background: "transparent", border: "none", outline: "none", color: "#e0e0e0", fontFamily: "'Courier New', monospace", fontSize: "0.9rem", padding: "12px 14px" }}
+              />
               <button onClick={handleSearch} disabled={loading} style={{ background: loading ? "#111" : "#0052ff", border: "none", borderRadius: "10px", color: "#fff", fontFamily: "'Courier New', monospace", fontWeight: 700, fontSize: "0.8rem", padding: "10px 16px", cursor: loading ? "default" : "pointer" }}>
                 {loading ? "..." : "SEARCH"}
               </button>
             </div>
+
+            {error && (
+              <div style={{ background: "#1a0a0a", border: "1px solid #ff3c5f44", borderRadius: "10px", padding: "12px 14px", marginBottom: "12px", fontSize: "0.75rem", color: "#ff3c5f", lineHeight: 1.5 }}>
+                ⚠️ {error}
+              </div>
+            )}
+
             <div style={{ fontSize: "0.65rem", color: "#333", textAlign: "center", letterSpacing: "0.1em" }}>WORKS WITH ANY FARCASTER USER OR BASE WALLET</div>
           </div>
         )}
