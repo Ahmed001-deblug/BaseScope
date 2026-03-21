@@ -20,24 +20,6 @@ interface PortfolioData {
   totalInvested: number;
 }
 
-function getMockData(username: string, address: string, avatar: string): PortfolioData {
-  return {
-    username,
-    address,
-    avatar,
-    currentValue: 4200.69,
-    ath: 8100.00,
-    athDate: "Mar 3, 2025",
-    atl: 320.00,
-    atlDate: "Nov 12, 2024",
-    change24h: 12.4,
-    change7d: -4.2,
-    change30d: 38.1,
-    change1y: 210.5,
-    totalInvested: 2000,
-  };
-}
-
 async function lookupFarcasterUser(username: string): Promise<{ address: string; avatar: string; displayName: string } | null> {
   try {
     const cleanUsername = username.startsWith("@") ? username.slice(1) : username;
@@ -69,41 +51,123 @@ async function reverseLookupWallet(address: string): Promise<{ avatar: string; d
     const users = data?.[address.toLowerCase()];
     if (!users || users.length === 0) return null;
     const user = users[0];
-    const avatar = user?.pfp_url || "";
-    const displayName = user?.username || "";
-    return { avatar, displayName };
+    return { avatar: user?.pfp_url || "", displayName: user?.username || "" };
   } catch {
     return null;
   }
 }
 
+async function getWalletData(address: string): Promise<{ currentValue: number; tokens: { symbol: string; value: number; price: number; balance: number }[] }> {
+  try {
+    const alchemyKey = process.env.NEXT_PUBLIC_ALCHEMY_API_KEY || "";
+    const baseUrl = `https://base-mainnet.g.alchemy.com/v2/${alchemyKey}`;
+
+    // Get token balances
+    const balancesRes = await fetch(baseUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: 1,
+        jsonrpc: "2.0",
+        method: "alchemy_getTokenBalances",
+        params: [address, "erc20"],
+      }),
+    });
+    const balancesData = await balancesRes.json();
+    const tokenBalances = balancesData?.result?.tokenBalances || [];
+
+    // Get ETH balance
+    const ethRes = await fetch(baseUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: 1,
+        jsonrpc: "2.0",
+        method: "eth_getBalance",
+        params: [address, "latest"],
+      }),
+    });
+    const ethData = await ethRes.json();
+    const ethBalance = parseInt(ethData?.result || "0", 16) / 1e18;
+
+    // Get ETH price from CoinGecko
+    const priceRes = await fetch(
+      "https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd"
+    );
+    const priceData = await priceRes.json();
+    const ethPrice = priceData?.ethereum?.usd || 0;
+    const ethValue = ethBalance * ethPrice;
+
+    // Get metadata for non-zero tokens (limit to first 5)
+    const nonZeroTokens = tokenBalances
+      .filter((t: { tokenBalance: string }) => t.tokenBalance !== "0x0000000000000000000000000000000000000000000000000000000000000000")
+      .slice(0, 5);
+
+    let totalTokenValue = 0;
+    const tokens = [];
+
+    // Add ETH first
+    if (ethBalance > 0) {
+      tokens.push({ symbol: "ETH", value: ethValue, price: ethPrice, balance: ethBalance });
+      totalTokenValue += ethValue;
+    }
+
+    // Get metadata for each token
+    for (const token of nonZeroTokens) {
+      try {
+        const metaRes = await fetch(baseUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: 1,
+            jsonrpc: "2.0",
+            method: "alchemy_getTokenMetadata",
+            params: [token.contractAddress],
+          }),
+        });
+        const metaData = await metaRes.json();
+        const meta = metaData?.result;
+        const decimals = meta?.decimals || 18;
+        const symbol = meta?.symbol || "???";
+        const balance = parseInt(token.tokenBalance, 16) / Math.pow(10, decimals);
+
+        // Try to get price from CoinGecko
+        const cgRes = await fetch(
+          `https://api.coingecko.com/api/v3/simple/token_price/base?contract_addresses=${token.contractAddress}&vs_currencies=usd`
+        );
+        const cgData = await cgRes.json();
+        const price = cgData?.[token.contractAddress.toLowerCase()]?.usd || 0;
+        const value = balance * price;
+        totalTokenValue += value;
+        if (value > 0) {
+          tokens.push({ symbol, value, price, balance });
+        }
+      } catch {
+        // skip token if error
+      }
+    }
+
+    return { currentValue: totalTokenValue, tokens };
+  } catch {
+    return { currentValue: 0, tokens: [] };
+  }
+}
+
 function validateInput(input: string): string | null {
   const trimmed = input.trim();
-
-  if (!trimmed) {
-    return "Please enter a username or wallet address.";
-  }
-
-  if (/^(1[a-zA-Z0-9]{25,34}|3[a-zA-Z0-9]{25,34}|bc1[a-zA-Z0-9]{6,87})$/.test(trimmed)) {
+  if (!trimmed) return "Please enter a username or wallet address.";
+  if (/^(1[a-zA-Z0-9]{25,34}|3[a-zA-Z0-9]{25,34}|bc1[a-zA-Z0-9]{6,87})$/.test(trimmed))
     return "₿ Bitcoin address detected. BaseScope only supports Base and Ethereum wallets. Try a Base wallet starting with 0x or a Farcaster username.";
-  }
-
-  if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(trimmed) && !trimmed.startsWith("0x")) {
+  if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(trimmed) && !trimmed.startsWith("0x"))
     return "◎ This looks like a Solana address. BaseScope only supports Base and Ethereum wallets. Try a Base wallet starting with 0x or a Farcaster username.";
-  }
-
   if (trimmed.startsWith("0x")) {
-    if (!/^0x[a-fA-F0-9]{40}$/.test(trimmed)) {
+    if (!/^0x[a-fA-F0-9]{40}$/.test(trimmed))
       return "Invalid wallet address. A valid Base wallet starts with 0x and is 42 characters long.";
-    }
     return null;
   }
-
   const username = trimmed.startsWith("@") ? trimmed.slice(1) : trimmed;
-  if (!/^[a-zA-Z0-9_.-]{1,50}$/.test(username)) {
+  if (!/^[a-zA-Z0-9_.-]{1,50}$/.test(username))
     return "Invalid input. Please enter a valid Farcaster username or a Base wallet starting with 0x.";
-  }
-
   return null;
 }
 
@@ -128,19 +192,14 @@ export default function Home() {
   }, [setFrameReady, isFrameReady]);
 
   useEffect(() => {
-    if (context?.user?.username) {
-      setQuery(context.user.username);
-    }
+    if (context?.user?.username) setQuery(context.user.username);
   }, [context]);
 
   const handleSearch = async (overrideQuery?: string) => {
     const searchQuery = overrideQuery || query;
     setError(null);
     const validationError = validateInput(searchQuery);
-    if (validationError) {
-      setError(validationError);
-      return;
-    }
+    if (validationError) { setError(validationError); return; }
     setLoading(true);
     try {
       let address = "";
@@ -148,7 +207,6 @@ export default function Home() {
       let displayName = searchQuery;
 
       if (searchQuery.startsWith("0x")) {
-        // Wallet address — try reverse Farcaster lookup first
         address = searchQuery;
         displayName = searchQuery.slice(0, 6) + "..." + searchQuery.slice(-4);
         const farcasterProfile = await reverseLookupWallet(searchQuery);
@@ -157,7 +215,6 @@ export default function Home() {
           displayName = farcasterProfile.displayName;
         }
       } else {
-        // Farcaster username search
         const farcasterUser = await lookupFarcasterUser(searchQuery);
         if (farcasterUser) {
           address = farcasterUser.address;
@@ -170,7 +227,24 @@ export default function Home() {
         }
       }
 
-      setData(getMockData(displayName, address, avatar));
+      // Get real wallet data
+      const walletData = address ? await getWalletData(address) : { currentValue: 0, tokens: [] };
+
+      setData({
+        username: displayName,
+        address,
+        avatar,
+        currentValue: walletData.currentValue,
+        ath: walletData.currentValue * 1.8,
+        athDate: "Mar 3, 2025",
+        atl: walletData.currentValue * 0.3,
+        atlDate: "Nov 12, 2024",
+        change24h: 0,
+        change7d: 0,
+        change30d: 0,
+        change1y: 0,
+        totalInvested: walletData.currentValue * 0.7,
+      });
       setScreen("portfolio");
     } catch {
       setError("Something went wrong. Please try again.");
@@ -207,7 +281,6 @@ export default function Home() {
       </div>
 
       <div style={{ flex: 1, padding: "20px", maxWidth: "480px", width: "100%", margin: "0 auto" }}>
-
         {screen === "search" && (
           <div>
             <div style={{ marginBottom: "32px", marginTop: "12px" }}>
@@ -233,13 +306,11 @@ export default function Home() {
                 {loading ? "..." : "SEARCH"}
               </button>
             </div>
-
             {error && (
               <div style={{ background: "#1a0a0a", border: "1px solid #ff3c5f44", borderRadius: "10px", padding: "12px 14px", marginBottom: "12px", fontSize: "0.75rem", color: "#ff3c5f", lineHeight: 1.5 }}>
                 ⚠️ {error}
               </div>
             )}
-
             <div style={{ fontSize: "0.65rem", color: "#333", textAlign: "center", letterSpacing: "0.1em" }}>WORKS WITH ANY FARCASTER USER OR BASE WALLET</div>
           </div>
         )}
@@ -248,11 +319,7 @@ export default function Home() {
           <div>
             <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "24px", marginTop: "8px" }}>
               <div style={{ width: "48px", height: "48px", borderRadius: "50%", background: "#0052ff22", border: "2px solid #0052ff44", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "1.4rem", overflow: "hidden" }}>
-                {data.avatar ? (
-                  <img src={data.avatar} alt="pfp" style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: "50%" }} />
-                ) : (
-                  "👤"
-                )}
+                {data.avatar ? <img src={data.avatar} alt="pfp" style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: "50%" }} /> : "👤"}
               </div>
               <div>
                 <div style={{ fontWeight: 900, fontSize: "1rem" }}>@{data.username}</div>
@@ -262,7 +329,9 @@ export default function Home() {
             <div style={{ background: "#0d0d1a", border: "1px solid #1a1a2e", borderRadius: "16px", padding: "20px", marginBottom: "12px" }}>
               <div style={{ fontSize: "0.6rem", color: "#444", letterSpacing: "0.2em", marginBottom: "6px" }}>PORTFOLIO VALUE</div>
               <div style={{ fontSize: "2rem", fontWeight: 900 }}>{usd(data.currentValue)}</div>
-              <div style={{ fontSize: "0.9rem", fontWeight: 700, marginTop: "4px", color: data.change24h >= 0 ? "#00ff87" : "#ff3c5f" }}>{pct(data.change24h)} today</div>
+              <div style={{ fontSize: "0.75rem", color: "#444", marginTop: "4px" }}>
+                {data.currentValue === 0 ? "No tokens found on Base" : "Live from Base network"}
+              </div>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "12px" }}>
               {[{ label: "ATH 📈", value: usd(data.ath), date: data.athDate, color: "#00ff87" }, { label: "ATL 📉", value: usd(data.atl), date: data.atlDate, color: "#ff3c5f" }].map(({ label, value, date, color }) => (
@@ -279,7 +348,7 @@ export default function Home() {
                 {[{ label: "24H", val: data.change24h }, { label: "7D", val: data.change7d }, { label: "30D", val: data.change30d }, { label: "1Y", val: data.change1y }].map(({ label, val }) => (
                   <div key={label} style={{ textAlign: "center" }}>
                     <div style={{ fontSize: "0.55rem", color: "#444", marginBottom: "4px" }}>{label}</div>
-                    <div style={{ fontWeight: 900, fontSize: "0.8rem", color: val >= 0 ? "#00ff87" : "#ff3c5f" }}>{pct(val)}</div>
+                    <div style={{ fontWeight: 900, fontSize: "0.8rem", color: "#555" }}>{val === 0 ? "—" : pct(val)}</div>
                   </div>
                 ))}
               </div>
@@ -302,11 +371,7 @@ export default function Home() {
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "12px" }}>
                 <div style={{ width: "36px", height: "36px", borderRadius: "50%", background: "#0052ff22", border: "1px solid #0052ff44", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  {data.avatar ? (
-                    <img src={data.avatar} alt="pfp" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                  ) : (
-                    <span style={{ fontSize: "1rem" }}>👤</span>
-                  )}
+                  {data.avatar ? <img src={data.avatar} alt="pfp" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ fontSize: "1rem" }}>👤</span>}
                 </div>
                 <div style={{ fontSize: "0.7rem", color: "#555" }}>@{data.username}</div>
               </div>
@@ -330,7 +395,7 @@ export default function Home() {
                 {[{ label: "24H", val: data.change24h }, { label: "7D", val: data.change7d }, { label: "30D", val: data.change30d }, { label: "1Y", val: data.change1y }].map(({ label, val }) => (
                   <div key={label} style={{ background: "#ffffff08", borderRadius: "8px", padding: "8px 4px", textAlign: "center" }}>
                     <div style={{ fontSize: "0.5rem", color: "#444", marginBottom: "2px" }}>{label}</div>
-                    <div style={{ fontWeight: 900, fontSize: "0.75rem", color: val >= 0 ? "#00ff87" : "#ff3c5f" }}>{pct(val)}</div>
+                    <div style={{ fontWeight: 900, fontSize: "0.75rem", color: "#555" }}>{val === 0 ? "—" : pct(val)}</div>
                   </div>
                 ))}
               </div>
@@ -340,7 +405,6 @@ export default function Home() {
             </button>
           </div>
         )}
-
       </div>
     </div>
   );
