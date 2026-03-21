@@ -20,11 +20,11 @@ interface PortfolioData {
   totalInvested: number;
 }
 
-function getMockData(query: string): PortfolioData {
+function getMockData(username: string, address: string, avatar: string): PortfolioData {
   return {
-    username: query.startsWith("0x") ? query.slice(0, 6) + "..." + query.slice(-4) : query,
-    address: query.startsWith("0x") ? query : "0x1a2b...9f3c",
-    avatar: "🧑‍💻",
+    username,
+    address,
+    avatar,
     currentValue: 4200.69,
     ath: 8100.00,
     athDate: "Mar 3, 2025",
@@ -36,6 +36,26 @@ function getMockData(query: string): PortfolioData {
     change1y: 210.5,
     totalInvested: 2000,
   };
+}
+
+async function lookupFarcasterUser(username: string): Promise<{ address: string; avatar: string; displayName: string } | null> {
+  try {
+    const cleanUsername = username.startsWith("@") ? username.slice(1) : username;
+    const res = await fetch(
+      `https://api.neynar.com/v2/farcaster/user/by_username?username=${cleanUsername}`,
+      { headers: { "api_key": process.env.NEXT_PUBLIC_NEYNAR_API_KEY || "" } }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    const user = data?.user;
+    if (!user) return null;
+    const address = user?.verified_addresses?.eth_addresses?.[0] || user?.custody_address || "";
+    const avatar = user?.pfp_url || "";
+    const displayName = user?.username || cleanUsername;
+    return { address, avatar, displayName };
+  } catch {
+    return null;
+  }
 }
 
 function validateInput(input: string): string | null {
@@ -94,19 +114,46 @@ export default function Home() {
     }
   }, [context]);
 
-  const handleSearch = () => {
+  const handleSearch = async (overrideQuery?: string) => {
+    const searchQuery = overrideQuery || query;
     setError(null);
-    const validationError = validateInput(query);
+    const validationError = validateInput(searchQuery);
     if (validationError) {
       setError(validationError);
       return;
     }
     setLoading(true);
-    setTimeout(() => {
-      setData(getMockData(query.trim()));
+    try {
+      let address = "";
+      let avatar = "";
+      let displayName = searchQuery;
+
+      if (searchQuery.startsWith("0x")) {
+        // Wallet address search — no Farcaster lookup
+        address = searchQuery;
+        avatar = "";
+        displayName = searchQuery.slice(0, 6) + "..." + searchQuery.slice(-4);
+      } else {
+        // Farcaster username search
+        const farcasterUser = await lookupFarcasterUser(searchQuery);
+        if (farcasterUser) {
+          address = farcasterUser.address;
+          avatar = farcasterUser.avatar;
+          displayName = farcasterUser.displayName;
+        } else {
+          setError("User not found on Farcaster. Check the username and try again.");
+          setLoading(false);
+          return;
+        }
+      }
+
+      setData(getMockData(displayName, address, avatar));
       setScreen("portfolio");
+    } catch {
+      setError("Something went wrong. Please try again.");
+    } finally {
       setLoading(false);
-    }, 1500);
+    }
   };
 
   const shareOnX = () => {
@@ -147,12 +194,7 @@ export default function Home() {
               <div style={{ fontSize: "0.7rem", color: "#555", letterSpacing: "0.1em" }}>ENTER FARCASTER USERNAME OR BASE WALLET</div>
             </div>
             {context?.user?.username && (
-              <button onClick={() => {
-                setError(null);
-                setQuery(context.user.username!);
-                setLoading(true);
-                setTimeout(() => { setData(getMockData(context.user.username!)); setScreen("portfolio"); setLoading(false); }, 1500);
-              }} style={{ width: "100%", padding: "16px", background: "linear-gradient(135deg, #0052ff, #0099ff)", border: "none", borderRadius: "12px", color: "#fff", fontFamily: "'Courier New', monospace", fontWeight: 900, fontSize: "0.9rem", cursor: "pointer", marginBottom: "16px" }}>
+              <button onClick={() => handleSearch(context.user.username!)} style={{ width: "100%", padding: "16px", background: "linear-gradient(135deg, #0052ff, #0099ff)", border: "none", borderRadius: "12px", color: "#fff", fontFamily: "'Courier New', monospace", fontWeight: 900, fontSize: "0.9rem", cursor: "pointer", marginBottom: "16px" }}>
                 📊 VIEW MY PORTFOLIO
               </button>
             )}
@@ -164,7 +206,7 @@ export default function Home() {
                 placeholder="@username or 0x..."
                 style={{ flex: 1, background: "transparent", border: "none", outline: "none", color: "#e0e0e0", fontFamily: "'Courier New', monospace", fontSize: "0.9rem", padding: "12px 14px" }}
               />
-              <button onClick={handleSearch} disabled={loading} style={{ background: loading ? "#111" : "#0052ff", border: "none", borderRadius: "10px", color: "#fff", fontFamily: "'Courier New', monospace", fontWeight: 700, fontSize: "0.8rem", padding: "10px 16px", cursor: loading ? "default" : "pointer" }}>
+              <button onClick={() => handleSearch()} disabled={loading} style={{ background: loading ? "#111" : "#0052ff", border: "none", borderRadius: "10px", color: "#fff", fontFamily: "'Courier New', monospace", fontWeight: 700, fontSize: "0.8rem", padding: "10px 16px", cursor: loading ? "default" : "pointer" }}>
                 {loading ? "..." : "SEARCH"}
               </button>
             </div>
@@ -182,10 +224,16 @@ export default function Home() {
         {screen === "portfolio" && data && (
           <div>
             <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "24px", marginTop: "8px" }}>
-              <div style={{ width: "48px", height: "48px", borderRadius: "50%", background: "#0052ff22", border: "2px solid #0052ff44", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "1.4rem" }}>{data.avatar}</div>
+              <div style={{ width: "48px", height: "48px", borderRadius: "50%", background: "#0052ff22", border: "2px solid #0052ff44", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "1.4rem", overflow: "hidden" }}>
+                {data.avatar ? (
+                  <img src={data.avatar} alt="pfp" style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: "50%" }} />
+                ) : (
+                  "👤"
+                )}
+              </div>
               <div>
                 <div style={{ fontWeight: 900, fontSize: "1rem" }}>@{data.username}</div>
-                <div style={{ fontSize: "0.6rem", color: "#444" }}>{data.address}</div>
+                <div style={{ fontSize: "0.6rem", color: "#444" }}>{data.address || "No wallet linked"}</div>
               </div>
             </div>
             <div style={{ background: "#0d0d1a", border: "1px solid #1a1a2e", borderRadius: "16px", padding: "20px", marginBottom: "12px" }}>
@@ -229,7 +277,16 @@ export default function Home() {
                 <div style={{ fontSize: "0.9rem", fontWeight: 900 }}>BASE<span style={{ color: "#0052ff" }}>SCOPE</span></div>
                 <div style={{ fontSize: "0.6rem", color: "#444" }}>🔵 BASE NETWORK</div>
               </div>
-              <div style={{ marginBottom: "8px", fontSize: "0.7rem", color: "#555" }}>@{data.username}</div>
+              <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "12px" }}>
+                <div style={{ width: "36px", height: "36px", borderRadius: "50%", background: "#0052ff22", border: "1px solid #0052ff44", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  {data.avatar ? (
+                    <img src={data.avatar} alt="pfp" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  ) : (
+                    <span style={{ fontSize: "1rem" }}>👤</span>
+                  )}
+                </div>
+                <div style={{ fontSize: "0.7rem", color: "#555" }}>@{data.username}</div>
+              </div>
               <div style={{ fontSize: "2rem", fontWeight: 900, marginBottom: "4px" }}>{usd(data.currentValue)}</div>
               <div style={{ fontSize: "1rem", fontWeight: 700, marginBottom: "20px", color: pnl >= 0 ? "#00ff87" : "#ff3c5f" }}>
                 {pnl >= 0 ? "▲" : "▼"} {usd(Math.abs(pnl))} ({pct(roi)})
