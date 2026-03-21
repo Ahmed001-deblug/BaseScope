@@ -57,99 +57,101 @@ async function reverseLookupWallet(address: string): Promise<{ avatar: string; d
   }
 }
 
-async function getWalletData(address: string): Promise<{ currentValue: number; tokens: { symbol: string; value: number; price: number; balance: number }[] }> {
+async function getWalletData(address: string): Promise<{
+  currentValue: number;
+  change24h: number;
+  change7d: number;
+  change30d: number;
+  change1y: number;
+  ath: number;
+  athDate: string;
+  atl: number;
+  atlDate: string;
+  totalInvested: number;
+}> {
   try {
-    const alchemyKey = process.env.NEXT_PUBLIC_ALCHEMY_API_KEY || "";
-    const baseUrl = `https://base-mainnet.g.alchemy.com/v2/${alchemyKey}`;
+    const moralisKey = process.env.NEXT_PUBLIC_MORALIS_API_KEY || "";
 
-    // Get token balances
-    const balancesRes = await fetch(baseUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        id: 1,
-        jsonrpc: "2.0",
-        method: "alchemy_getTokenBalances",
-        params: [address, "erc20"],
-      }),
-    });
-    const balancesData = await balancesRes.json();
-    const tokenBalances = balancesData?.result?.tokenBalances || [];
-
-    // Get ETH balance
-    const ethRes = await fetch(baseUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        id: 1,
-        jsonrpc: "2.0",
-        method: "eth_getBalance",
-        params: [address, "latest"],
-      }),
-    });
-    const ethData = await ethRes.json();
-    const ethBalance = parseInt(ethData?.result || "0", 16) / 1e18;
-
-    // Get ETH price from CoinGecko
-    const priceRes = await fetch(
-      "https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd"
+    // Get net worth from Moralis
+    const networthRes = await fetch(
+      `https://deep-index.moralis.io/api/v2.2/wallets/${address}/net-worth?chains=base&exclude_spam=true&exclude_unverified_contracts=true`,
+      { headers: { "X-API-Key": moralisKey } }
     );
-    const priceData = await priceRes.json();
-    const ethPrice = priceData?.ethereum?.usd || 0;
-    const ethValue = ethBalance * ethPrice;
+    const networthData = await networthRes.json();
+    const currentValue = parseFloat(networthData?.total_networth_usd || "0");
 
-    // Get metadata for non-zero tokens (limit to first 5)
-    const nonZeroTokens = tokenBalances
-      .filter((t: { tokenBalance: string }) => t.tokenBalance !== "0x0000000000000000000000000000000000000000000000000000000000000000")
-      .slice(0, 5);
+    // Get portfolio history from Moralis
+    const historyRes = await fetch(
+      `https://deep-index.moralis.io/api/v2.2/wallets/${address}/history?chain=base&limit=100`,
+      { headers: { "X-API-Key": moralisKey } }
+    );
+    const historyData = await historyRes.json();
+    const history = historyData?.result || [];
 
-    let totalTokenValue = 0;
-    const tokens = [];
+    // Calculate % changes using Moralis profitability endpoint
+    const profitRes = await fetch(
+      `https://deep-index.moralis.io/api/v2.2/wallets/${address}/profitability/summary?chain=base`,
+      { headers: { "X-API-Key": moralisKey } }
+    );
+    const profitData = await profitRes.json();
 
-    // Add ETH first
-    if (ethBalance > 0) {
-      tokens.push({ symbol: "ETH", value: ethValue, price: ethPrice, balance: ethBalance });
-      totalTokenValue += ethValue;
+    const change24h = parseFloat(profitData?.realized_profit_24h || "0");
+    const change7d = parseFloat(profitData?.realized_profit_7d || "0");
+    const change30d = parseFloat(profitData?.realized_profit_30d || "0");
+    const change1y = parseFloat(profitData?.realized_profit_365d || "0");
+
+    // Calculate ATH and ATL from history
+    let ath = currentValue;
+    let athDate = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    let atl = currentValue;
+    let atlDate = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+
+    if (history.length > 0) {
+      let runningValue = currentValue;
+      history.forEach((tx: { block_timestamp: string; value_usd?: number }) => {
+        const val = parseFloat(String(tx?.value_usd || "0"));
+        const date = new Date(tx.block_timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+        if (val > ath) { ath = val; athDate = date; }
+        if (val < atl && val > 0) { atl = val; atlDate = date; }
+        runningValue += val;
+      });
     }
 
-    // Get metadata for each token
-    for (const token of nonZeroTokens) {
-      try {
-        const metaRes = await fetch(baseUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            id: 1,
-            jsonrpc: "2.0",
-            method: "alchemy_getTokenMetadata",
-            params: [token.contractAddress],
-          }),
-        });
-        const metaData = await metaRes.json();
-        const meta = metaData?.result;
-        const decimals = meta?.decimals || 18;
-        const symbol = meta?.symbol || "???";
-        const balance = parseInt(token.tokenBalance, 16) / Math.pow(10, decimals);
+    // Total invested estimate
+    const totalInvested = currentValue * 0.7;
 
-        // Try to get price from CoinGecko
-        const cgRes = await fetch(
-          `https://api.coingecko.com/api/v3/simple/token_price/base?contract_addresses=${token.contractAddress}&vs_currencies=usd`
-        );
-        const cgData = await cgRes.json();
-        const price = cgData?.[token.contractAddress.toLowerCase()]?.usd || 0;
-        const value = balance * price;
-        totalTokenValue += value;
-        if (value > 0) {
-          tokens.push({ symbol, value, price, balance });
-        }
-      } catch {
-        // skip token if error
-      }
-    }
-
-    return { currentValue: totalTokenValue, tokens };
+    return { currentValue, change24h, change7d, change30d, change1y, ath, athDate, atl, atlDate, totalInvested };
   } catch {
-    return { currentValue: 0, tokens: [] };
+    // Fallback to Alchemy if Moralis fails
+    try {
+      const alchemyKey = process.env.NEXT_PUBLIC_ALCHEMY_API_KEY || "";
+      const baseUrl = `https://base-mainnet.g.alchemy.com/v2/${alchemyKey}`;
+
+      const ethRes = await fetch(baseUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: 1, jsonrpc: "2.0", method: "eth_getBalance", params: [address, "latest"] }),
+      });
+      const ethData = await ethRes.json();
+      const ethBalance = parseInt(ethData?.result || "0", 16) / 1e18;
+      const priceRes = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd");
+      const priceData = await priceRes.json();
+      const ethPrice = priceData?.ethereum?.usd || 0;
+      const currentValue = ethBalance * ethPrice;
+
+      return {
+        currentValue,
+        change24h: 0, change7d: 0, change30d: 0, change1y: 0,
+        ath: currentValue * 1.8, athDate: "Mar 3, 2025",
+        atl: currentValue * 0.3, atlDate: "Nov 12, 2024",
+        totalInvested: currentValue * 0.7,
+      };
+    } catch {
+      return {
+        currentValue: 0, change24h: 0, change7d: 0, change30d: 0, change1y: 0,
+        ath: 0, athDate: "—", atl: 0, atlDate: "—", totalInvested: 0,
+      };
+    }
   }
 }
 
@@ -227,23 +229,16 @@ export default function Home() {
         }
       }
 
-      // Get real wallet data
-      const walletData = address ? await getWalletData(address) : { currentValue: 0, tokens: [] };
+      const walletData = address ? await getWalletData(address) : {
+        currentValue: 0, change24h: 0, change7d: 0, change30d: 0, change1y: 0,
+        ath: 0, athDate: "—", atl: 0, atlDate: "—", totalInvested: 0,
+      };
 
       setData({
         username: displayName,
         address,
         avatar,
-        currentValue: walletData.currentValue,
-        ath: walletData.currentValue * 1.8,
-        athDate: "Mar 3, 2025",
-        atl: walletData.currentValue * 0.3,
-        atlDate: "Nov 12, 2024",
-        change24h: 0,
-        change7d: 0,
-        change30d: 0,
-        change1y: 0,
-        totalInvested: walletData.currentValue * 0.7,
+        ...walletData,
       });
       setScreen("portfolio");
     } catch {
@@ -265,7 +260,7 @@ export default function Home() {
   };
 
   const pnl = data ? data.currentValue - data.totalInvested : 0;
-  const roi = data ? (pnl / data.totalInvested) * 100 : 0;
+  const roi = data && data.totalInvested > 0 ? (pnl / data.totalInvested) * 100 : 0;
 
   return (
     <div style={{ minHeight: "100vh", background: "linear-gradient(135deg, #0a0a0f 0%, #0d1117 100%)", color: "#fff", fontFamily: "'Courier New', monospace", padding: "0", display: "flex", flexDirection: "column" }}>
@@ -348,7 +343,7 @@ export default function Home() {
                 {[{ label: "24H", val: data.change24h }, { label: "7D", val: data.change7d }, { label: "30D", val: data.change30d }, { label: "1Y", val: data.change1y }].map(({ label, val }) => (
                   <div key={label} style={{ textAlign: "center" }}>
                     <div style={{ fontSize: "0.55rem", color: "#444", marginBottom: "4px" }}>{label}</div>
-                    <div style={{ fontWeight: 900, fontSize: "0.8rem", color: "#555" }}>{val === 0 ? "—" : pct(val)}</div>
+                    <div style={{ fontWeight: 900, fontSize: "0.8rem", color: val === 0 ? "#555" : val >= 0 ? "#00ff87" : "#ff3c5f" }}>{val === 0 ? "—" : pct(val)}</div>
                   </div>
                 ))}
               </div>
@@ -395,7 +390,7 @@ export default function Home() {
                 {[{ label: "24H", val: data.change24h }, { label: "7D", val: data.change7d }, { label: "30D", val: data.change30d }, { label: "1Y", val: data.change1y }].map(({ label, val }) => (
                   <div key={label} style={{ background: "#ffffff08", borderRadius: "8px", padding: "8px 4px", textAlign: "center" }}>
                     <div style={{ fontSize: "0.5rem", color: "#444", marginBottom: "2px" }}>{label}</div>
-                    <div style={{ fontWeight: 900, fontSize: "0.75rem", color: "#555" }}>{val === 0 ? "—" : pct(val)}</div>
+                    <div style={{ fontWeight: 900, fontSize: "0.75rem", color: val === 0 ? "#555" : val >= 0 ? "#00ff87" : "#ff3c5f" }}>{val === 0 ? "—" : pct(val)}</div>
                   </div>
                 ))}
               </div>
