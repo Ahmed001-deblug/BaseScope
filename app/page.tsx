@@ -70,79 +70,89 @@ async function getWalletData(address: string): Promise<{
   totalInvested: number;
 }> {
   try {
-    const moralisKey = process.env.NEXT_PUBLIC_MORALIS_API_KEY || "";
+    const zerionKey = process.env.NEXT_PUBLIC_ZERION_API_KEY || "";
+    const encoded = btoa(`${zerionKey}:`);
 
-    // Get current net worth from Moralis (includes all tokens)
-    const networthRes = await fetch(
-      `https://deep-index.moralis.io/api/v2.2/wallets/${address}/net-worth?chains=base&exclude_spam=true&exclude_unverified_contracts=false`,
-      { headers: { "X-API-Key": moralisKey } }
+    // Get portfolio positions filtered to Base chain only
+    const portfolioRes = await fetch(
+      `https://api.zerion.io/v1/wallets/${address}/positions/?filter[chain_ids]=base&filter[position_types]=wallet&currency=usd`,
+      {
+        headers: {
+          "Authorization": `Basic ${encoded}`,
+          "Content-Type": "application/json",
+        }
+      }
     );
-    const networthData = await networthRes.json();
-    const currentValue = parseFloat(networthData?.total_networth_usd || "0");
+    const portfolioData = await portfolioRes.json();
+    const positions = portfolioData?.data || [];
 
-    // Get full net worth history for ATH/ATL
-    const historyRes = await fetch(
-      `https://deep-index.moralis.io/api/v2.2/wallets/${address}/net-worth/history?chain=base&days=3650`,
-      { headers: { "X-API-Key": moralisKey } }
+    // Sum up all Base token values
+    const currentValue = positions.reduce((total: number, pos: {
+      attributes?: { value?: number }
+    }) => {
+      const value = pos?.attributes?.value || 0;
+      return total + value;
+    }, 0);
+
+    // Get portfolio chart for ATH/ATL (1 year of data)
+    const chartRes = await fetch(
+      `https://api.zerion.io/v1/wallets/${address}/portfolio/chart?currency=usd&period=year&filter[chain_ids]=base`,
+      {
+        headers: {
+          "Authorization": `Basic ${encoded}`,
+          "Content-Type": "application/json",
+        }
+      }
     );
-    const historyData = await historyRes.json();
-    const snapshots: { date: string; total_networth_usd: string }[] = historyData?.result || [];
+    const chartData = await chartRes.json();
+    const points: [number, number][] = chartData?.data?.attributes?.points || [];
 
     let ath = currentValue;
     let athDate = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
     let atl = currentValue;
     let atlDate = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 
-    snapshots.forEach((snap) => {
-      const val = parseFloat(snap.total_networth_usd || "0");
-      const date = new Date(snap.date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-      if (val > ath) { ath = val; athDate = date; }
-      if (val > 0 && val < atl) { atl = val; atlDate = date; }
+    points.forEach(([timestamp, value]) => {
+      const date = new Date(timestamp * 1000).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+      if (value > ath) { ath = value; athDate = date; }
+      if (value > 0 && value < atl) { atl = value; atlDate = date; }
     });
 
-    // Get % changes
-    const profitRes = await fetch(
-      `https://deep-index.moralis.io/api/v2.2/wallets/${address}/profitability/summary?chain=base`,
-      { headers: { "X-API-Key": moralisKey } }
+    // Get 24h, 7d, 30d, 1y changes from portfolio
+    const pnlRes = await fetch(
+      `https://api.zerion.io/v1/wallets/${address}/portfolio/?currency=usd&filter[chain_ids]=base`,
+      {
+        headers: {
+          "Authorization": `Basic ${encoded}`,
+          "Content-Type": "application/json",
+        }
+      }
     );
-    const profitData = await profitRes.json();
-    const change24h = parseFloat(profitData?.realized_profit_24h || "0");
-    const change7d = parseFloat(profitData?.realized_profit_7d || "0");
-    const change30d = parseFloat(profitData?.realized_profit_30d || "0");
-    const change1y = parseFloat(profitData?.realized_profit_365d || "0");
+    const pnlData = await pnlRes.json();
+    const changes = pnlData?.data?.attributes?.changes || {};
+
+    const change24h = changes?.percent_1d || 0;
+    const change7d = changes?.percent_1w || 0;
+    const change30d = changes?.percent_1m || 0;
+    const change1y = changes?.percent_1y || 0;
 
     return {
-      currentValue, change24h, change7d, change30d, change1y,
-      ath, athDate, atl, atlDate,
+      currentValue,
+      change24h,
+      change7d,
+      change30d,
+      change1y,
+      ath,
+      athDate,
+      atl,
+      atlDate,
       totalInvested: currentValue * 0.7,
     };
   } catch {
-    try {
-      const alchemyKey = process.env.NEXT_PUBLIC_ALCHEMY_API_KEY || "";
-      const baseUrl = `https://base-mainnet.g.alchemy.com/v2/${alchemyKey}`;
-      const ethRes = await fetch(baseUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: 1, jsonrpc: "2.0", method: "eth_getBalance", params: [address, "latest"] }),
-      });
-      const ethData = await ethRes.json();
-      const ethBalance = parseInt(ethData?.result || "0", 16) / 1e18;
-      const priceRes = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd");
-      const priceData = await priceRes.json();
-      const ethPrice = priceData?.ethereum?.usd || 0;
-      const currentValue = ethBalance * ethPrice;
-      return {
-        currentValue, change24h: 0, change7d: 0, change30d: 0, change1y: 0,
-        ath: currentValue * 1.8, athDate: "Mar 3, 2025",
-        atl: currentValue * 0.3, atlDate: "Nov 12, 2024",
-        totalInvested: currentValue * 0.7,
-      };
-    } catch {
-      return {
-        currentValue: 0, change24h: 0, change7d: 0, change30d: 0, change1y: 0,
-        ath: 0, athDate: "—", atl: 0, atlDate: "—", totalInvested: 0,
-      };
-    }
+    return {
+      currentValue: 0, change24h: 0, change7d: 0, change30d: 0, change1y: 0,
+      ath: 0, athDate: "—", atl: 0, atlDate: "—", totalInvested: 0,
+    };
   }
 }
 
