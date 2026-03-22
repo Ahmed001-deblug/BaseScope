@@ -7,7 +7,6 @@ export async function GET(req: NextRequest) {
   const moralisKey = process.env.MORALIS_API_KEY || "";
 
   try {
-    // Get current net worth
     const networthRes = await fetch(
       `https://deep-index.moralis.io/api/v2.2/wallets/${address}/net-worth?chains=base&exclude_spam=true&exclude_unverified_contracts=true`,
       { headers: { "X-API-Key": moralisKey } }
@@ -15,7 +14,6 @@ export async function GET(req: NextRequest) {
     const networthData = await networthRes.json();
     const currentValue = parseFloat(networthData?.total_networth_usd || "0");
 
-    // Get history for ATH/ATL
     const historyRes = await fetch(
       `https://deep-index.moralis.io/api/v2.2/wallets/${address}/net-worth/history?chain=base&days=3650`,
       { headers: { "X-API-Key": moralisKey } }
@@ -35,7 +33,6 @@ export async function GET(req: NextRequest) {
       if (val > 0 && val < atl) { atl = val; atlDate = date; }
     });
 
-    // Get % changes
     const profitRes = await fetch(
       `https://deep-index.moralis.io/api/v2.2/wallets/${address}/profitability/summary?chain=base`,
       { headers: { "X-API-Key": moralisKey } }
@@ -48,12 +45,9 @@ export async function GET(req: NextRequest) {
       change7d: parseFloat(profitData?.realized_profit_7d || "0"),
       change30d: parseFloat(profitData?.realized_profit_30d || "0"),
       change1y: parseFloat(profitData?.realized_profit_365d || "0"),
-      ath,
-      athDate,
-      atl,
-      atlDate,
+      ath, athDate, atl, atlDate,
     });
-  } catch {
-    return NextResponse.json({ error: "Failed", currentValue: 0 }, { status: 500 });
+  } catch (e) {
+    return NextResponse.json({ error: String(e), currentValue: 0 }, { status: 500 });
   }
 }
