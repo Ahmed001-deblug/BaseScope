@@ -1,54 +1,47 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 
-export async function GET(req: NextRequest) {
-  const address = req.nextUrl.searchParams.get("address");
-  if (!address) return NextResponse.json({ error: "No address" }, { status: 400 });
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const address = searchParams.get("address");
+  
+  if (!address) {
+    return NextResponse.json({ error: "No address provided" }, { status: 400 });
+  }
 
   const moralisKey = process.env.MORALIS_API_KEY || "";
+  
+  if (!moralisKey) {
+    return NextResponse.json({ error: "No API key configured" }, { status: 500 });
+  }
+
+  let currentValue = 0;
 
   try {
-    const networthRes = await fetch(
+    const res = await fetch(
       `https://deep-index.moralis.io/api/v2.2/wallets/${address}/net-worth?chains=base&exclude_spam=true&exclude_unverified_contracts=true`,
-      { headers: { "X-API-Key": moralisKey } }
+      { 
+        method: "GET",
+        headers: { 
+          "X-API-Key": moralisKey,
+          "Accept": "application/json"
+        } 
+      }
     );
-    const networthData = await networthRes.json();
-    const currentValue = parseFloat(networthData?.total_networth_usd || "0");
-
-    const historyRes = await fetch(
-      `https://deep-index.moralis.io/api/v2.2/wallets/${address}/net-worth/history?chain=base&days=3650`,
-      { headers: { "X-API-Key": moralisKey } }
-    );
-    const historyData = await historyRes.json();
-    const snapshots: { date: string; total_networth_usd: string }[] = historyData?.result || [];
-
-    let ath = currentValue;
-    let athDate = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-    let atl = currentValue;
-    let atlDate = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-
-    snapshots.forEach((snap) => {
-      const val = parseFloat(snap.total_networth_usd || "0");
-      const date = new Date(snap.date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-      if (val > ath) { ath = val; athDate = date; }
-      if (val > 0 && val < atl) { atl = val; atlDate = date; }
-    });
-
-    const profitRes = await fetch(
-      `https://deep-index.moralis.io/api/v2.2/wallets/${address}/profitability/summary?chain=base`,
-      { headers: { "X-API-Key": moralisKey } }
-    );
-    const profitData = await profitRes.json();
-
-    return NextResponse.json({
-      currentValue,
-      change24h: parseFloat(profitData?.realized_profit_24h || "0"),
-      change7d: parseFloat(profitData?.realized_profit_7d || "0"),
-      change30d: parseFloat(profitData?.realized_profit_30d || "0"),
-      change1y: parseFloat(profitData?.realized_profit_365d || "0"),
-      ath, athDate, atl, atlDate,
-    });
+    const json = await res.json();
+    currentValue = parseFloat(json?.total_networth_usd || "0");
   } catch (e) {
-    return NextResponse.json({ error: String(e), currentValue: 0 }, { status: 500 });
+    return NextResponse.json({ error: String(e), currentValue: 0 });
   }
-}
 
+  return NextResponse.json({
+    currentValue,
+    change24h: 0,
+    change7d: 0,
+    change30d: 0,
+    change1y: 0,
+    ath: currentValue,
+    athDate: "—",
+    atl: currentValue,
+    atlDate: "—",
+  });
+}
