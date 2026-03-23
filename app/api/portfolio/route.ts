@@ -51,3 +51,4 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: String(e), currentValue: 0 }, { status: 500 });
   }
 }
+
