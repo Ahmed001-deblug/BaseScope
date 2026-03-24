@@ -28,10 +28,34 @@ export async function GET(request: Request) {
 
     const json = await res.json();
 
+    const currentValue = parseFloat(json?.total_networth_usd || "0");
+
     return NextResponse.json({
-      moralisRaw: json
+      currentValue,
+      change24h: 0,
+      change7d: 0,
+      change30d: 0,
+      change1y: 0,
+      ath: currentValue,
+      athDate: "—",
+      atl: currentValue,
+      atlDate: "—"
     });
   } catch (e) {
-    return NextResponse.json({ error: String(e) }, { status: 500 });
+    return NextResponse.json(
+      {
+        error: String(e),
+        currentValue: 0,
+        change24h: 0,
+        change7d: 0,
+        change30d: 0,
+        change1y: 0,
+        ath: 0,
+        athDate: "—",
+        atl: 0,
+        atlDate: "—"
+      },
+      { status: 500 }
+    );
   }
 }
